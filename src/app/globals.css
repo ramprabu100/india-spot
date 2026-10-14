@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #e8f2ef;
+  --fg: #0c1f1c;
+  --muted: #4a635d;
+  --surface: #f4faf8;
+  --surface-2: #dcebe6;
+  --surface-3: #c8ddd6;
+  --border: #b5cfc6;
+  --accent: #0f766e;
+  --accent-hover: #0d5f59;
+  --accent-fg: #f7fffc;
+  --sand: #f0d9a8;
+  --ink: #061412;
+  --ring: #14b8a6;
+  --panorama-fallback: #1a3a35;
+  --map-bg: #c5ddd6;
+  --shadow: 0 18px 50px -28px rgba(6, 20, 18, 0.45);
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  color: var(--fg);
+  background: var(--bg);
+  font-family: var(--font-body), system-ui, sans-serif;
+}
+
+.atmosphere {
+  background:
+    radial-gradient(ellipse 90% 60% at 10% -10%, #9fd4c8 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 0%, #f0d9a8 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 50% 100%, #7eb8ad 0%, transparent 55%),
+    linear-gradient(165deg, #e8f2ef 0%, #d5e8e1 45%, #eef5f1 100%);
+}
+
+.atmosphere::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.07;
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 30h60M30 0v60' stroke='%230c1f1c' stroke-width='0.5' fill='none'/%3E%3C/svg%3E");
+  background-size: 60px 60px;
+}
+
+.hero-wash {
+  background:
+    linear-gradient(120deg, transparent 40%, rgba(15, 118, 110, 0.08) 100%),
+    radial-gradient(circle at 80% 20%, rgba(240, 217, 168, 0.35), transparent 45%);
+}
+
+.pin-prompt-wash {
+  background:
+    radial-gradient(ellipse 80% 60% at 0% 0%, rgba(15, 118, 110, 0.12), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 100%, rgba(240, 217, 168, 0.28), transparent 50%),
+    linear-gradient(160deg, rgba(244, 250, 248, 0.9), rgba(220, 235, 230, 0.5));
+}
+
+.mode-card-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow);
+  background: var(--surface);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise 0.55s ease-out both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade {
+  animation: fade-in 0.4s ease-out both;
+}
+
+/* Leaflet tweaks inside our theme */
+.leaflet-container {
+  font-family: var(--font-body), system-ui, sans-serif;
+  background: var(--map-bg);
+  touch-action: manipulation;
+}
+
+.leaflet-container.cursor-crosshair,
+.leaflet-container.cursor-crosshair .leaflet-grab {
+  cursor: crosshair !important;
+}
+
+/* Avoid default white square behind divIcon pins */
+.india-spot-pin {
+  background: transparent !important;
+  border: none !important;
+}
