@@ -66,4 +66,94 @@ export function GameApp() {
 
   const place = deck[roundIndex] ?? null;
   const sessionScore = useMemo(
-    () => results.reduce((s, r) 
+    () => results.reduce((s, r) => s + r.score, 0),
+    [results],
+  );
+
+  const startSpot = useCallback(() => {
+    const next = shufflePlaces(placesForMode("spot"), ROUNDS_PER_GAME);
+    setDeck(next);
+    setRoundIndex(0);
+    setGuess(null);
+    setResults([]);
+    setMapOpen(false);
+    setScreen({ kind: "spot-playing" });
+  }, []);
+
+  const submitGuess = useCallback(() => {
+    if (!place || !guess) return;
+    const distanceKm = haversineKm(guess, {
+      lat: place.lat,
+      lng: place.lng,
+    });
+    const score = scoreFromDistanceKm(distanceKm);
+    setResults((prev) => [...prev, { place, guess, distanceKm, score }]);
+    setScreen({ kind: "spot-result" });
+  }, [place, guess]);
+
+  const nextRound = useCallback(() => {
+    if (roundIndex + 1 >= deck.length) {
+      setScreen({ kind: "spot-summary" });
+      return;
+    }
+    setRoundIndex((i) => i + 1);
+    setGuess(null);
+    setMapOpen(false);
+    setScreen({ kind: "spot-playing" });
+  }, [roundIndex, deck.length]);
+
+  useEffect(() => {
+    placesForMode("spot").forEach((p) => {
+      if (!p.image) return;
+      const img = new Image();
+      img.src = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}${p.image}`;
+    });
+  }, []);
+
+  const activeQuiz =
+    screen.kind === "seterra"
+      ? QUIZZES.find((q) => q.id === screen.quizId)
+      : null;
+
+  const inSpot =
+    screen.kind === "spot-playing" ||
+    screen.kind === "spot-result" ||
+    screen.kind === "spot-summary";
+
+  return (
+    <div className="relative min-h-dvh overflow-x-hidden">
+      <div className="pointer-events-none absolute inset-0 -z-10 atmosphere" aria-hidden />
+
+      <header className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6">
+        <button
+          type="button"
+          className="flex items-baseline gap-2 text-left"
+          onClick={() => setScreen({ kind: "home" })}
+        >
+          <h1 className="font-[family-name:var(--font-display)] text-xl tracking-tight text-[var(--fg)] sm:text-2xl">
+            India Spot
+          </h1>
+          <span className="hidden text-xs uppercase tracking-[0.18em] text-[var(--muted)] sm:inline">
+            TN first
+          </span>
+        </button>
+        {inSpot && screen.kind !== "spot-summary" && (
+          <div className="flex items-center gap-3 text-sm text-[var(--muted)]">
+            <span className="hidden rounded border border-[var(--border)] px-2 py-0.5 text-[10px] uppercase tracking-wider sm:inline">
+              Spot the place
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Trophy className="size-3.5 text-[var(--accent)]" aria-hidden />
+              <span className="tabular-nums text-[var(--fg)]">
+                {sessionScore.toLocaleString()}
+              </span>
+            </span>
+            <span className="tabular-nums">
+              Round {Math.min(roundIndex + 1, deck.length)}/{deck.length}
+            </span>
+          </div>
+        )}
+      </header>
+
+      {screen.kind === "home" && (
+        <HomeScre
