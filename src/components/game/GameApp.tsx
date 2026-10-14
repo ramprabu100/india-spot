@@ -156,4 +156,141 @@ export function GameApp() {
       </header>
 
       {screen.kind === "home" && (
-        <HomeScre
+        <HomeScreen
+          onStartSpot={startSpot}
+          onStartQuiz={(quiz, mode) => {
+            if (mode !== "pin" || quiz.status !== "live" || !quiz.geoPath) return;
+            setScreen({ kind: "seterra", quizId: quiz.id });
+          }}
+        />
+      )}
+
+      {screen.kind === "seterra" && activeQuiz?.geoPath && (
+        <SeterraPinQuiz
+          title={activeQuiz.title}
+          geoPath={activeQuiz.geoPath}
+          onExit={() => setScreen({ kind: "home" })}
+        />
+      )}
+
+      {(screen.kind === "spot-playing" || screen.kind === "spot-result") &&
+        place && (
+          <main className="mx-auto grid max-w-6xl gap-4 px-4 pb-28 sm:px-6 lg:grid-cols-[1.35fr_1fr] lg:pb-8">
+            <section className="relative animate-rise overflow-hidden rounded-xl border border-[var(--border)] shadow-[var(--shadow)]">
+              <PanoramaView
+                place={place}
+                revealed={screen.kind === "spot-result"}
+              />
+            </section>
+
+            <section
+              className={cn(
+                "flex flex-col gap-3",
+                mapOpen
+                  ? "fixed inset-0 z-40 bg-[var(--bg)] p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:p-0"
+                  : "hidden lg:flex",
+              )}
+            >
+              <div className="flex items-center justify-between lg:hidden">
+                <p className="font-[family-name:var(--font-display)] text-lg">
+                  Drop your pin
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => setMapOpen(false)}
+                >
+                  Close
+                </Button>
+              </div>
+              <p className="hidden text-sm text-[var(--muted)] lg:block">
+                Guess where this place is in {live.name}. Closer pins score
+                higher (max {MAX_SCORE.toLocaleString()}).
+              </p>
+              <div className="min-h-0 w-full flex-1">
+                <GuessMap
+                  mapKey={`spot-${place.id}-${mapOpen ? "open" : "dock"}`}
+                  guess={guess}
+                  onGuess={setGuess}
+                  truth={screen.kind === "spot-result" ? place : null}
+                  revealed={screen.kind === "spot-result"}
+                  interactive={screen.kind === "spot-playing"}
+                  bounds={live.bounds!}
+                />
+              </div>
+
+              {screen.kind === "spot-playing" && (
+                <div className="relative z-20 flex gap-2">
+                  <Button
+                    type="button"
+                    className="flex-1"
+                    size="lg"
+                    disabled={!guess}
+                    onClick={submitGuess}
+                  >
+                    <MapPin className="size-4" aria-hidden />
+                    {guess ? "Lock guess" : "Drop a pin first"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="lg:hidden"
+                    onClick={() => setMapOpen(false)}
+                  >
+                    Back
+                  </Button>
+                </div>
+              )}
+
+              {screen.kind === "spot-result" && results[results.length - 1] && (
+                <div className="relative z-20">
+                  <ResultPanel
+                    result={results[results.length - 1]}
+                    isLast={roundIndex + 1 >= deck.length}
+                    onNext={nextRound}
+                  />
+                </div>
+              )}
+            </section>
+
+            {screen.kind === "spot-playing" && !mapOpen && (
+              <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--border)] bg-[var(--surface)]/95 p-4 backdrop-blur lg:hidden">
+                <Button
+                  type="button"
+                  className="w-full"
+                  size="lg"
+                  onClick={() => setMapOpen(true)}
+                >
+                  <Compass className="size-4" />
+                  Open map & guess
+                </Button>
+              </div>
+            )}
+          </main>
+        )}
+
+      {screen.kind === "spot-summary" && (
+        <SummaryScreen
+          results={results}
+          total={sessionScore}
+          onReplay={startSpot}
+          onHome={() => setScreen({ kind: "home" })}
+        />
+      )}
+    </div>
+  );
+}
+
+function HomeScreen({
+  onStartSpot,
+  onStartQuiz,
+}: {
+  onStartSpot: () => void;
+  onStartQuiz: (quiz: QuizDef, mode: QuizModeId) => void;
+}) {
+  return (
+    <main className="mx-auto max-w-5xl px-4 pb-16 pt-6 sm:px-6 sm:pt-10">
+      <div className="relative overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]/70 shadow-[var(--shadow)] animate-rise">
+        <div className="hero-wash pointer-events-none absolute inset-0" aria-hidden />
+        <div className="rel
