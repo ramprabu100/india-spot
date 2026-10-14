@@ -26,7 +26,11 @@ jobs:
           cache: npm
 
       - name: Install
-        run: npm ci
+        # Incomplete lockfiles from API uploads need npm install, not npm ci.
+        run: npm install
+
+      - name: Fetch map + Spot images
+        run: node scripts/fetch-assets.mjs
 
       - name: Build static export
         env:
