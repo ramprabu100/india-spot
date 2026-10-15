@@ -1,5 +1,5 @@
 /**
- * CI helper: refresh TN district GeoJSON + Spot mode images before static export.
+ * CI helper: refresh TN district + India state GeoJSON and Spot images before static export.
  * Keeps gameplay identical; assets are the same open sources used locally.
  */
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const UA = "IndiaSpot/1.0 (GitHub Pages build; educational)";
 
-const NAME_FIX = {
+const TN_NAME_FIX = {
   Tiruchchirappalli: "Tiruchirappalli",
   "Tirunelveli Kattabo": "Tirunelveli",
   Kanniyakumari: "Kanyakumari",
@@ -17,6 +17,12 @@ const NAME_FIX = {
   Thiruvallur: "Tiruvallur",
   Thiruvarur: "Tiruvarur",
   Sivaganga: "Sivagangai",
+};
+
+const STATE_NAME_FIX = {
+  Orissa: "Odisha",
+  Uttaranchal: "Uttarakhand",
+  "Andaman and Nicobar": "Andaman and Nicobar Islands",
 };
 
 const IMAGES = [
@@ -42,6 +48,32 @@ async function fetchBuf(url) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+function slugify(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function makeBBoxWalker() {
+  let minx = 1e9,
+    miny = 1e9,
+    maxx = -1e9,
+    maxy = -1e9;
+  const walk = (c) => {
+    if (typeof c[0] === "number") {
+      minx = Math.min(minx, c[0]);
+      maxx = Math.max(maxx, c[0]);
+      miny = Math.min(miny, c[1]);
+      maxy = Math.max(maxy, c[1]);
+    } else c.forEach(walk);
+  };
+  return {
+    walk,
+    bbox: () => [minx, miny, maxx, maxy],
+  };
+}
+
 function simplifyRing(ring, step) {
   if (ring.length <= 4 || step <= 1) return ring;
   const out = ring.filter((_, i) => i % step === 0 || i === ring.length - 1);
@@ -63,43 +95,102 @@ function simplifyGeom(geom, step) {
   return g;
 }
 
-async function buildGeo() {
+function perpDist(a, b, p) {
+  const [ax, ay] = a;
+  const [bx, by] = b;
+  const [px, py] = p;
+  const dx = bx - ax;
+  const dy = by - ay;
+  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(
+    0,
+    Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)),
+  );
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function subsampleRing(ring, maxPts) {
+  if (ring.length <= maxPts) return ring;
+  const step = Math.max(1, Math.floor((ring.length - 1) / (maxPts - 1)));
+  const out = [];
+  for (let i = 0; i < ring.length - 1; i += step) out.push(ring[i]);
+  if (out[out.length - 1] !== ring[ring.length - 1]) out.push(ring[ring.length - 1]);
+  if (out[0][0] !== out[out.length - 1][0] || out[0][1] !== out[out.length - 1][1]) {
+    out.push(out[0]);
+  }
+  return out;
+}
+
+function roundRing(ring, nd = 3) {
+  return ring.map(([lon, lat]) => [Number(lon.toFixed(nd)), Number(lat.toFixed(nd))]);
+}
+
+function dpRing(ring, epsilon) {
+  if (ring.length <= 4) return roundRing(ring);
+  const rec = (pts) => {
+    if (pts.length <= 2) return pts;
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    let idx = 1;
+    let best = -1;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const d = perpDist(a, b, pts[i]);
+      if (d > best) {
+        best = d;
+        idx = i;
+      }
+    }
+    if (best > epsilon) {
+      const left = rec(pts.slice(0, idx + 1));
+      const right = rec(pts.slice(idx));
+      return left.slice(0, -1).concat(right);
+    }
+    return [a, b];
+  };
+  let out = rec(ring);
+  if (out[0][0] !== out[out.length - 1][0] || out[0][1] !== out[out.length - 1][1]) {
+    out.push(out[0]);
+  }
+  if (out.length < 4) out = subsampleRing(ring, 32);
+  if (out.length > 80) out = subsampleRing(out, 64);
+  return roundRing(out);
+}
+
+function simplifyGeomDp(geom, epsilon) {
+  const g = structuredClone(geom);
+  if (g.type === "Polygon") {
+    g.coordinates = g.coordinates.map((r) => dpRing(r, epsilon));
+  } else if (g.type === "MultiPolygon") {
+    g.coordinates = g.coordinates.map((poly) =>
+      poly.map((r) => dpRing(r, epsilon)),
+    );
+  }
+  return g;
+}
+
+async function buildTnDistricts() {
   const url =
     "https://raw.githubusercontent.com/geohacker/india/master/district/india_district.geojson";
-  console.log("Downloading district boundaries…");
+  console.log("Downloading district boundaries...");
   const data = await fetchJson(url);
   const tn = data.features.filter(
     (f) => String(f.properties?.NAME_1 || "").toLowerCase() === "tamil nadu",
   );
-  let minx = 1e9,
-    miny = 1e9,
-    maxx = -1e9,
-    maxy = -1e9;
-  const walk = (c) => {
-    if (typeof c[0] === "number") {
-      minx = Math.min(minx, c[0]);
-      maxx = Math.max(maxx, c[0]);
-      miny = Math.min(miny, c[1]);
-      maxy = Math.max(maxy, c[1]);
-    } else c.forEach(walk);
-  };
+  const { walk, bbox } = makeBBoxWalker();
   const features = tn.map((f) => {
     const raw = f.properties.NAME_2;
-    const name = NAME_FIX[raw] || raw;
+    const name = TN_NAME_FIX[raw] || raw;
     const geometry = simplifyGeom(f.geometry, 6);
     walk(geometry.coordinates);
     return {
       type: "Feature",
-      properties: {
-        name,
-        id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
-      },
+      properties: { name, id: slugify(name) },
       geometry,
     };
   });
   const out = {
     type: "FeatureCollection",
-    bbox: [minx, miny, maxx, maxy],
+    bbox: bbox(),
     meta: {
       source: "https://github.com/geohacker/india — district/india_district.geojson",
       license_note:
@@ -113,6 +204,41 @@ async function buildGeo() {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(out));
   console.log(`Wrote ${features.length} districts -> ${path}`);
+}
+
+async function buildIndiaStates() {
+  const url =
+    "https://raw.githubusercontent.com/geohacker/india/master/state/india_state.geojson";
+  console.log("Downloading India state / UT boundaries...");
+  const data = await fetchJson(url);
+  const { walk, bbox } = makeBBoxWalker();
+  const features = data.features.map((f) => {
+    const raw = f.properties.NAME_1;
+    const name = STATE_NAME_FIX[raw] || raw;
+    const geometry = simplifyGeomDp(f.geometry, 0.04);
+    walk(geometry.coordinates);
+    return {
+      type: "Feature",
+      properties: { name, id: slugify(name) },
+      geometry,
+    };
+  });
+  const out = {
+    type: "FeatureCollection",
+    bbox: bbox().map((n) => Number(n.toFixed(4))),
+    meta: {
+      source: "https://github.com/geohacker/india — state/india_state.geojson",
+      license_note:
+        "Open community boundaries derived from public GADM-style data; simplified for web quiz use.",
+      region: "India",
+      count: features.length,
+    },
+    features,
+  };
+  const path = join(root, "public/geo/india-states.geojson");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(out));
+  console.log(`Wrote ${features.length} states/UTs -> ${path}`);
 }
 
 async function buildImages() {
@@ -157,6 +283,7 @@ async function buildImages() {
   }
 }
 
-await buildGeo();
+await buildTnDistricts();
+await buildIndiaStates();
 await buildImages();
-console.log("Assets ready.");
+console.log("Assets ready.\n");
