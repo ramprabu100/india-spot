@@ -171,7 +171,7 @@ function simplifyGeomDp(geom, epsilon) {
 async function buildTnDistricts() {
   const url =
     "https://raw.githubusercontent.com/geohacker/india/master/district/india_district.geojson";
-  console.log("Downloading district boundaries\u2026");
+  console.log("Downloading district boundaries…");
   const data = await fetchJson(url);
   const tn = data.features.filter(
     (f) => String(f.properties?.NAME_1 || "").toLowerCase() === "tamil nadu",
@@ -192,7 +192,7 @@ async function buildTnDistricts() {
     type: "FeatureCollection",
     bbox: bbox(),
     meta: {
-      source: "https://github.com/geohacker/india \u2014 district/india_district.geojson",
+      source: "https://github.com/geohacker/india — district/india_district.geojson",
       license_note:
         "Open community boundaries derived from public GADM-style data; simplified for web quiz use.",
       region: "Tamil Nadu",
@@ -209,7 +209,7 @@ async function buildTnDistricts() {
 async function buildIndiaStates() {
   const url =
     "https://raw.githubusercontent.com/geohacker/india/master/state/india_state.geojson";
-  console.log("Downloading India state / UT boundaries\u2026");
+  console.log("Downloading India state / UT boundaries…");
   const data = await fetchJson(url);
   const features = data.features.map((f) => {
     const raw = f.properties.NAME_1;
@@ -259,7 +259,7 @@ async function buildIndiaStates() {
   features.length = 0;
   features.push(...withoutLadakh);
   console.log(
-    "Applied India-claim outline (J&K: PoK+Gilgit-Baltistan; Ladakh: Aksai Chin+Shaksgam+Siachen+Demchok; Kalapani\u2192Uttarakhand)",
+    "Applied India-claim outline (J&K: PoK+Gilgit-Baltistan; Ladakh: Aksai Chin+Shaksgam+Siachen+Demchok; Kalapani→Uttarakhand)",
   );
 
   const { walk, bbox } = makeBBoxWalker();
@@ -269,7 +269,7 @@ async function buildIndiaStates() {
     bbox: bbox().map((n) => Number(n.toFixed(4))),
     meta: {
       source:
-        "https://github.com/geohacker/india \u2014 state/india_state.geojson; northern claim via public/geo/india-north-claim.geojson (BharatMaps + datameet PoK/Gilgit-Baltistan + LSIB Aksai Chin/Siachen/Demchok + NE Shaksgam)",
+        "https://github.com/geohacker/india — state/india_state.geojson; northern claim via public/geo/india-north-claim.geojson (BharatMaps + datameet PoK/Gilgit-Baltistan + LSIB Aksai Chin/Siachen/Demchok + NE Shaksgam)",
       license_note:
         "Open community boundaries; Jammu & Kashmir includes PoK and Gilgit-Baltistan; Ladakh includes Aksai Chin (plus Shaksgam/Siachen/Demchok) per India's official claim for this quiz map.",
       region: "India",
