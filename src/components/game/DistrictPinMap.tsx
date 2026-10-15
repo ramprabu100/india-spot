@@ -34,37 +34,65 @@ const FILL: Record<DistrictResultColor, string> = {
 const MAX_ZOOM = 3.25;
 /** Aim for the hovered region to cover roughly this fraction of the shorter axis. */
 const TARGET_REGION_FRACTION = 0.28;
-/** Per-frame lerp toward the target viewBox (short ease, not a jump). */
-const EASE = 0.22;
 /**
- * Screen-pixel halo around the pointer. If a small region sits inside this
- * halo (even while the cursor is still over a large neighbor or near-coast
- * ocean), we use that region's zoom so Sikkim/Goa/Chennai engage before the
- * pointer has to land exactly on their tiny polygons.
+ * First-order camera time constant (seconds). Longer = glide, not chase.
+ * Exponential smoothing has no overshoot (critically-damped-like feel).
  */
-const PROXIMITY_PX = 40;
-/** Only regions that would zoom above this participate in proximity magnetism. */
-const MAGNET_MIN_SCALE = 1.35;
+const CAMERA_TAU = 0.28;
+/** Low-pass the raw pointer so pixel noise does not re-pan every move. */
+const POINTER_TAU = 0.07;
+/**
+ * Halo for approaching small regions (Sikkim/Goa/Chennai). Kept modest so
+ * it does not yank the camera between neighbors on every pixel.
+ */
+const PROXIMITY_PX = 28;
+const MAGNET_MIN_SCALE = 1.45;
+/** Stay locked to the current region while the pointer is this close to it. */
+const REGION_HOLD_PX = 18;
+/** Ignore scale retargets smaller than this while still "engaged". */
+const SCALE_EPS = 0.08;
 
 type ViewBox = { x: number; y: number; w: number; h: number };
+
+type CamState = {
+  rawX: number;
+  rawY: number;
+  smoothX: number;
+  smoothY: number;
+  hasPointer: boolean;
+  lockedId: string | null;
+  lockedScale: number;
+  /** Desired viewBox (updated from smoothed pointer + locked scale). */
+  desired: ViewBox;
+  /** Displayed viewBox (eased toward desired). */
+  current: ViewBox;
+  pointerDown: boolean;
+  hoverActive: boolean;
+  lastTs: number;
+  raf: number | null;
+};
 
 function viewSize(bbox: BBox): { width: number; height: number } {
   const [west, south, east, north] = bbox;
   const gw = Math.max(east - west, 0.01);
   const gh = Math.max(north - south, 0.01);
   const aspect = gw / gh;
-  // India is wider; TN districts are taller.
   if (aspect >= 0.95) {
     return { width: 820, height: Math.round(820 / aspect) };
   }
   return { width: 720, height: 860 };
 }
 
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
+function fullView(width: number, height: number): ViewBox {
+  return { x: 0, y: 0, w: width, h: height };
 }
 
-function nearlyEqual(a: ViewBox, b: ViewBox, eps = 0.05) {
+function expAlpha(dt: number, tau: number) {
+  // 1 - e^(-dt/tau): time-based ease, no overshoot, frame-rate independent.
+  return 1 - Math.exp(-Math.max(dt, 0) / Math.max(tau, 0.001));
+}
+
+function nearlyEqual(a: ViewBox, b: ViewBox, eps = 0.04) {
   return (
     Math.abs(a.x - b.x) < eps &&
     Math.abs(a.y - b.y) < eps &&
@@ -75,8 +103,7 @@ function nearlyEqual(a: ViewBox, b: ViewBox, eps = 0.05) {
 
 /**
  * Pointer-anchored zoom: keep the SVG point under the cursor fixed on screen
- * while changing scale. That is what makes the click hit the region that is
- * visually under the cursor (the usual slide-out failure mode).
+ * while changing scale so the click hits the region visually under the cursor.
  */
 function viewBoxForFocus(
   width: number,
@@ -92,7 +119,6 @@ function viewBoxForFocus(
   const h = height / s;
   let x = focusX - fracX * w;
   let y = focusY - fracY * h;
-  // Soft clamp: allow a little ocean padding, keep most of the land in frame.
   const padX = w * 0.15;
   const padY = h * 0.15;
   x = Math.min(Math.max(x, -padX), width - w + padX);
@@ -110,6 +136,16 @@ function scaleForRegion(
   const mapSpan = Math.min(mapW, mapH);
   const raw = (TARGET_REGION_FRACTION * mapSpan) / regionSpan;
   return Math.min(MAX_ZOOM, Math.max(1, raw));
+}
+
+function distToRect(
+  x: number,
+  y: number,
+  r: { left: number; top: number; right: number; bottom: number },
+) {
+  const dx = Math.max(r.left - x, 0, x - r.right);
+  const dy = Math.max(r.top - y, 0, y - r.bottom);
+  return Math.hypot(dx, dy);
 }
 
 export function DistrictPinMap({
@@ -138,169 +174,277 @@ export function DistrictPinMap({
   );
 
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const viewBoxRef = useRef<ViewBox>({ x: 0, y: 0, w: width, h: height });
-  const targetRef = useRef<ViewBox>({ x: 0, y: 0, w: width, h: height });
-  const pointerDownRef = useRef(false);
-  const hoverEnabledRef = useRef(false);
-  const rafRef = useRef<number | null>(null);
+  const sizeRef = useRef({ width, height });
+  sizeRef.current = { width, height };
 
-  // Keep full-size defaults in sync if the map aspect changes (India vs TN).
-  useEffect(() => {
-    const full = { x: 0, y: 0, w: width, h: height };
-    viewBoxRef.current = full;
-    targetRef.current = full;
-    const svg = svgRef.current;
-    if (svg) svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  }, [width, height]);
-
-  const tick = useCallback(() => {
-    rafRef.current = null;
-    const cur = viewBoxRef.current;
-    const tgt = targetRef.current;
-    if (nearlyEqual(cur, tgt)) {
-      viewBoxRef.current = tgt;
-      const svg = svgRef.current;
-      if (svg) {
-        svg.setAttribute(
-          "viewBox",
-          `${tgt.x} ${tgt.y} ${tgt.w} ${tgt.h}`,
-        );
-      }
-      return;
-    }
-    const next: ViewBox = {
-      x: lerp(cur.x, tgt.x, EASE),
-      y: lerp(cur.y, tgt.y, EASE),
-      w: lerp(cur.w, tgt.w, EASE),
-      h: lerp(cur.h, tgt.h, EASE),
+  const camRef = useRef<CamState | null>(null);
+  if (!camRef.current) {
+    const full = fullView(width, height);
+    camRef.current = {
+      rawX: 0,
+      rawY: 0,
+      smoothX: 0,
+      smoothY: 0,
+      hasPointer: false,
+      lockedId: null,
+      lockedScale: 1,
+      desired: full,
+      current: full,
+      pointerDown: false,
+      hoverActive: false,
+      lastTs: 0,
+      raf: null,
     };
-    viewBoxRef.current = next;
+  }
+
+  const applyViewBox = useCallback((vb: ViewBox) => {
     const svg = svgRef.current;
-    if (svg) {
-      svg.setAttribute("viewBox", `${next.x} ${next.y} ${next.w} ${next.h}`);
-    }
-    rafRef.current = requestAnimationFrame(tick);
+    if (!svg) return;
+    svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
   }, []);
 
-  const scheduleTick = useCallback(() => {
-    if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(tick);
-  }, [tick]);
-
-  const setTarget = useCallback(
-    (next: ViewBox) => {
-      targetRef.current = next;
-      scheduleTick();
-    },
-    [scheduleTick],
-  );
-
-  const resetTarget = useCallback(() => {
-    setTarget({ x: 0, y: 0, w: width, h: height });
-  }, [setTarget, width, height]);
-
-  useEffect(() => {
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    };
-  }, []);
-
-  const clientToSvgFocus = useCallback(
-    (clientX: number, clientY: number) => {
+  const clientToFocus = useCallback(
+    (clientX: number, clientY: number, vb: ViewBox) => {
       const svg = svgRef.current;
       if (!svg) return null;
       const rect = svg.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
       const fracX = (clientX - rect.left) / rect.width;
       const fracY = (clientY - rect.top) / rect.height;
-      const vb = viewBoxRef.current;
-      const focusX = vb.x + fracX * vb.w;
-      const focusY = vb.y + fracY * vb.h;
-      return { focusX, focusY, fracX, fracY };
+      return {
+        focusX: vb.x + fracX * vb.w,
+        focusY: vb.y + fracY * vb.h,
+        fracX,
+        fracY,
+      };
     },
     [],
   );
 
-  /**
-   * Pick zoom from the region under the cursor, or the smallest nearby
-   * small region inside PROXIMITY_PX (magnetic approach aid).
-   */
-  const scaleAtPointer = useCallback(
-    (clientX: number, clientY: number): { scale: number; engage: boolean } => {
+  /** Resolve which region drives zoom — sticky while pointer stays nearby. */
+  const resolveRegion = useCallback(
+    (
+      clientX: number,
+      clientY: number,
+      lockedId: string | null,
+    ): { id: string | null; scale: number; engage: boolean } => {
       const svg = svgRef.current;
-      if (!svg) return { scale: 1, engage: false };
+      const { width: mapW, height: mapH } = sizeRef.current;
+      if (!svg) return { id: null, scale: 1, engage: false };
 
-      let directScale = 1;
-      let overLand = false;
+      const pathScale = (p: SVGPathElement) => {
+        try {
+          const b = p.getBBox();
+          return {
+            scale: scaleForRegion(b.width, b.height, mapW, mapH),
+            span: Math.max(b.width, b.height, 1),
+          };
+        } catch {
+          return { scale: 1, span: Infinity };
+        }
+      };
+
       const hit = document.elementFromPoint(clientX, clientY);
       const direct =
-        hit instanceof SVGPathElement && hit.dataset.districtId ? hit : null;
-      if (direct && svg.contains(direct)) {
-        overLand = true;
-        try {
-          const b = direct.getBBox();
-          directScale = scaleForRegion(b.width, b.height, width, height);
-        } catch {
-          /* ignore */
+        hit instanceof SVGPathElement &&
+        hit.dataset.districtId &&
+        svg.contains(hit)
+          ? hit
+          : null;
+
+      // Direct hit always wins — sticky hold must not trap the camera on a
+      // large neighbor when the pointer moves onto Sikkim/Goa/Chennai.
+      if (direct) {
+        const { scale } = pathScale(direct);
+        return {
+          id: direct.dataset.districtId ?? null,
+          scale,
+          engage: true,
+        };
+      }
+
+      // No direct hit: keep the locked region while nearby (ocean gaps / edges).
+      if (lockedId) {
+        const locked = svg.querySelector(
+          `path[data-district-id="${lockedId}"]`,
+        ) as SVGPathElement | null;
+        if (locked) {
+          const r = locked.getBoundingClientRect();
+          if (distToRect(clientX, clientY, r) <= REGION_HOLD_PX) {
+            const { scale } = pathScale(locked);
+            return { id: lockedId, scale, engage: true };
+          }
         }
       }
 
-      let magnetScale = 1;
-      let magnetSpan = Infinity;
+      // Modest proximity magnet for tiny regions only (not every neighbor).
+      let best: { id: string; scale: number; span: number } | null = null;
       const nodes = svg.querySelectorAll("path[data-district-id]");
       for (let i = 0; i < nodes.length; i++) {
         const p = nodes[i] as SVGPathElement;
         const r = p.getBoundingClientRect();
-        const dx = Math.max(r.left - clientX, 0, clientX - r.right);
-        const dy = Math.max(r.top - clientY, 0, clientY - r.bottom);
-        if (Math.hypot(dx, dy) > PROXIMITY_PX) continue;
-        let span = 1;
-        let s = 1;
-        try {
-          const b = p.getBBox();
-          span = Math.max(b.width, b.height, 1);
-          s = scaleForRegion(b.width, b.height, width, height);
-        } catch {
-          continue;
-        }
-        if (s < MAGNET_MIN_SCALE) continue;
-        if (span < magnetSpan) {
-          magnetSpan = span;
-          magnetScale = s;
+        if (distToRect(clientX, clientY, r) > PROXIMITY_PX) continue;
+        const { scale, span } = pathScale(p);
+        if (scale < MAGNET_MIN_SCALE) continue;
+        if (!best || span < best.span) {
+          best = { id: p.dataset.districtId!, scale, span };
         }
       }
+      if (best) return { id: best.id, scale: best.scale, engage: true };
 
-      const scale = Math.max(directScale, magnetScale);
-      const engage = overLand || magnetScale >= MAGNET_MIN_SCALE;
-      return { scale, engage };
+      return { id: null, scale: 1, engage: false };
     },
-    [width, height],
+    [],
   );
 
-  const updateHoverZoom = useCallback(
-    (clientX: number, clientY: number) => {
-      if (pointerDownRef.current) return;
-      const focus = clientToSvgFocus(clientX, clientY);
-      if (!focus) return;
-      const { scale, engage } = scaleAtPointer(clientX, clientY);
-      if (!engage) {
-        resetTarget();
+  const tick = useCallback(
+    (ts: number) => {
+      const cam = camRef.current!;
+      cam.raf = null;
+      const { width: mapW, height: mapH } = sizeRef.current;
+      const dt =
+        cam.lastTs === 0 ? 1 / 60 : Math.min(0.05, (ts - cam.lastTs) / 1000);
+      cam.lastTs = ts;
+
+      // Freeze everything while a click is in progress.
+      if (cam.pointerDown) {
+        applyViewBox(cam.current);
         return;
       }
-      setTarget(
-        viewBoxForFocus(
-          width,
-          height,
-          scale,
-          focus.focusX,
-          focus.focusY,
-          focus.fracX,
-          focus.fracY,
-        ),
-      );
+
+      if (cam.hoverActive && cam.hasPointer) {
+        const pA = expAlpha(dt, POINTER_TAU);
+        cam.smoothX += (cam.rawX - cam.smoothX) * pA;
+        cam.smoothY += (cam.rawY - cam.smoothY) * pA;
+
+        const resolved = resolveRegion(
+          cam.smoothX,
+          cam.smoothY,
+          cam.lockedId,
+        );
+
+        if (!resolved.engage) {
+          cam.lockedId = null;
+          cam.lockedScale = 1;
+          cam.desired = fullView(mapW, mapH);
+        } else {
+          // Retarget zoom only when the region changes (or scale jumps).
+          if (resolved.id !== cam.lockedId) {
+            cam.lockedId = resolved.id;
+            cam.lockedScale = resolved.scale;
+          } else if (
+            Math.abs(resolved.scale - cam.lockedScale) > SCALE_EPS &&
+            // Only allow scale bump when magnet/direct clearly wants more zoom
+            // (e.g. entering a tiny exclave), not noise.
+            resolved.scale > cam.lockedScale + SCALE_EPS
+          ) {
+            cam.lockedScale = resolved.scale;
+          }
+          // Same region: hold zoom, pan gently via updated focus only.
+          const focus = clientToFocus(
+            cam.smoothX,
+            cam.smoothY,
+            cam.current,
+          );
+          if (focus) {
+            cam.desired = viewBoxForFocus(
+              mapW,
+              mapH,
+              cam.lockedScale,
+              focus.focusX,
+              focus.focusY,
+              focus.fracX,
+              focus.fracY,
+            );
+          }
+        }
+      } else {
+        cam.lockedId = null;
+        cam.lockedScale = 1;
+        cam.desired = fullView(mapW, mapH);
+      }
+
+      const cA = expAlpha(dt, CAMERA_TAU);
+      const cur = cam.current;
+      const des = cam.desired;
+      const next: ViewBox = {
+        x: cur.x + (des.x - cur.x) * cA,
+        y: cur.y + (des.y - cur.y) * cA,
+        w: cur.w + (des.w - cur.w) * cA,
+        h: cur.h + (des.h - cur.h) * cA,
+      };
+      // Snap when close enough so the full-outline rest pose is exact.
+      if (nearlyEqual(next, des, 4)) {
+        cam.current = des;
+      } else {
+        cam.current = next;
+      }
+      applyViewBox(cam.current);
+
+      const stillMoving =
+        cam.hoverActive ||
+        !nearlyEqual(cam.current, fullView(mapW, mapH)) ||
+        !nearlyEqual(cam.current, cam.desired);
+      if (stillMoving || cam.hoverActive) {
+        cam.raf = requestAnimationFrame(tick);
+      } else {
+        cam.lastTs = 0;
+      }
     },
-    [clientToSvgFocus, scaleAtPointer, resetTarget, setTarget, width, height],
+    [applyViewBox, clientToFocus, resolveRegion],
   );
+
+  const ensureLoop = useCallback(() => {
+    const cam = camRef.current!;
+    if (cam.raf != null) return;
+    cam.lastTs = 0;
+    cam.raf = requestAnimationFrame(tick);
+  }, [tick]);
+
+  // Reset camera when map aspect changes (India vs TN).
+  useEffect(() => {
+    const full = fullView(width, height);
+    const cam = camRef.current!;
+    cam.desired = full;
+    cam.current = full;
+    cam.lockedId = null;
+    cam.lockedScale = 1;
+    applyViewBox(full);
+  }, [width, height, applyViewBox]);
+
+  useEffect(() => {
+    return () => {
+      const cam = camRef.current;
+      if (cam?.raf != null) cancelAnimationFrame(cam.raf);
+    };
+  }, []);
+
+  const setRawPointer = useCallback(
+    (clientX: number, clientY: number) => {
+      const cam = camRef.current!;
+      if (!cam.hasPointer) {
+        cam.smoothX = clientX;
+        cam.smoothY = clientY;
+        cam.hasPointer = true;
+      }
+      cam.rawX = clientX;
+      cam.rawY = clientY;
+      ensureLoop();
+    },
+    [ensureLoop],
+  );
+
+  const leaveMap = useCallback(() => {
+    const cam = camRef.current!;
+    cam.hoverActive = false;
+    cam.hasPointer = false;
+    cam.lockedId = null;
+    cam.lockedScale = 1;
+    if (!cam.pointerDown) {
+      cam.desired = fullView(sizeRef.current.width, sizeRef.current.height);
+      ensureLoop();
+    }
+  }, [ensureLoop]);
 
   const isHoverPointer = (e: React.PointerEvent) => {
     if (e.pointerType === "touch") return false;
@@ -310,44 +454,52 @@ export function DistrictPinMap({
   };
 
   const onPointerEnter = (e: React.PointerEvent<SVGSVGElement>) => {
-    hoverEnabledRef.current = isHoverPointer(e);
+    if (!isHoverPointer(e)) return;
+    camRef.current!.hoverActive = true;
+    setRawPointer(e.clientX, e.clientY);
   };
 
   const onPointerLeave = () => {
-    hoverEnabledRef.current = false;
-    if (!pointerDownRef.current) resetTarget();
+    leaveMap();
   };
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    const cam = camRef.current!;
     if (!isHoverPointer(e)) {
-      hoverEnabledRef.current = false;
-      resetTarget();
+      cam.hoverActive = false;
+      leaveMap();
       return;
     }
-    pointerDownRef.current = true;
-    targetRef.current = { ...viewBoxRef.current };
+    // Freeze the displayed view so the click cannot slide off the target.
+    cam.pointerDown = true;
+    cam.desired = { ...cam.current };
+    if (cam.raf != null) {
+      cancelAnimationFrame(cam.raf);
+      cam.raf = null;
+    }
+    applyViewBox(cam.current);
   };
 
   const onPointerUp = () => {
-    pointerDownRef.current = false;
+    const cam = camRef.current!;
+    cam.pointerDown = false;
+    ensureLoop();
   };
 
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
     if (!isHoverPointer(e)) return;
-    hoverEnabledRef.current = true;
-    updateHoverZoom(e.clientX, e.clientY);
+    camRef.current!.hoverActive = true;
+    setRawPointer(e.clientX, e.clientY);
   };
 
-  // mousemove is mouse-only (never touch) — keeps hover zoom working even
-  // when pointerType / coarse-pointer media flags are wrong in automation.
+  // Mouse-only path (never fires for touch).
   const onMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    hoverEnabledRef.current = true;
-    updateHoverZoom(e.clientX, e.clientY);
+    camRef.current!.hoverActive = true;
+    setRawPointer(e.clientX, e.clientY);
   };
 
   const onMouseLeave = () => {
-    hoverEnabledRef.current = false;
-    if (!pointerDownRef.current) resetTarget();
+    leaveMap();
   };
 
   return (
