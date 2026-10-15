@@ -212,10 +212,17 @@ export function DistrictPinMap({
     [],
   );
 
+  const isHoverPointer = (e: React.PointerEvent) => {
+    if (e.pointerType === "touch") return false;
+    if (e.pointerType === "mouse" || e.pointerType === "pen") return true;
+    // Some automation sends empty pointerType; allow only fine-hover devices.
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  };
+
   const onPointerEnter = (e: React.PointerEvent<SVGSVGElement>) => {
     // Fine pointer + hover only. Touch has no hover; leave tap alone.
-    hoverEnabledRef.current =
-      e.pointerType === "mouse" || e.pointerType === "pen";
+    hoverEnabledRef.current = isHoverPointer(e);
   };
 
   const onPointerLeave = () => {
@@ -224,7 +231,7 @@ export function DistrictPinMap({
   };
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (e.pointerType !== "mouse" && e.pointerType !== "pen") {
+    if (!isHoverPointer(e)) {
       // Touch: do not engage hover zoom at all.
       hoverEnabledRef.current = false;
       resetTarget();
@@ -241,9 +248,9 @@ export function DistrictPinMap({
   };
 
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (!hoverEnabledRef.current) return;
+    if (!isHoverPointer(e)) return;
+    hoverEnabledRef.current = true;
     if (pointerDownRef.current) return;
-    if (e.pointerType !== "mouse" && e.pointerType !== "pen") return;
 
     const focus = clientToSvgFocus(e.clientX, e.clientY);
     if (!focus) return;
@@ -271,13 +278,10 @@ export function DistrictPinMap({
       return;
     }
 
+    // Always follow over land. Large states stay near 1×; small ones
+    // ramp up (capped). Do NOT hard-reset on large states — that canceled
+    // zoom before the pointer could settle on Sikkim/Goa/Chennai.
     const scale = scaleForRegion(regionW, regionH, width, height);
-    if (scale <= 1.05) {
-      // Large regions: stay at (or near) the full map.
-      resetTarget();
-      return;
-    }
-
     setTarget(
       viewBoxForFocus(
         width,
