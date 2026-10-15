@@ -94,6 +94,16 @@ export function GameApp() {
     });
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = new URLSearchParams(window.location.search).get("quiz");
+    if (!id) return;
+    const quiz = QUIZZES.find((q) => q.id === id);
+    if (quiz?.status === "live" && quiz.geoPath) {
+      setScreen({ kind: "seterra", quizId: quiz.id });
+    }
+  }, []);
+
   const activeQuiz =
     screen.kind === "seterra"
       ? QUIZZES.find((q) => q.id === screen.quizId)
@@ -153,6 +163,8 @@ export function GameApp() {
         <SeterraPinQuiz
           title={activeQuiz.title}
           geoPath={activeQuiz.geoPath}
+          itemNoun={activeQuiz.itemNoun ?? "regions"}
+          mapLabel={`${activeQuiz.title} map`}
           onExit={() => setScreen({ kind: "home" })}
         />
       )}
