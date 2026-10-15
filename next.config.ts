@@ -16,7 +16,7 @@ const nextConfig: NextConfig = {
   },
   // Dev server binds 0.0.0.0; browsers still hit via 127.0.0.1 / localhost.
   // Without this, Next blocks /_next/hmr and client hydration never attaches handlers.
-  allowedDevOrigins: ["127.0.0.1", "localhost"],
+  allowedDevOrigins: ["127.0.0.1", "localhost", "0.0.0.0"],
 };
 
 export default nextConfig;
