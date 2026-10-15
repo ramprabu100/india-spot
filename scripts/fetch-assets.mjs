@@ -303,7 +303,7 @@ async function buildImages() {
     }
     const buf = await fetchBuf(url);
     writeFileSync(dest, buf);
-    console.log(`Wrote ${slug}.jpg (${buf.length} bytes)}`);
+    console.log(`Wrote ${slug}.jpg (${buf.length} bytes)`);
   }
 }
 
