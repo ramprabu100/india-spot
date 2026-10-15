@@ -28,7 +28,7 @@ export function HomeScreen({
             </h2>
             <p className="mt-4 max-w-md text-base leading-relaxed text-[var(--muted)] sm:text-lg">
               Spot places from photos, or play classic Seterra-style Pin quizzes
-              on a Tamil Nadu district map.
+              on Tamil Nadu districts and India's states.
             </p>
           </div>
           <div className="relative aspect-[4/3] overflow-hidden rounded-xl border border-[var(--border)]">
