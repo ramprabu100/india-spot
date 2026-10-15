@@ -1,4 +1,4 @@
-"use client";
+use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
@@ -27,16 +27,25 @@ type GeoFile = {
 type Props = {
   title: string;
   geoPath: string;
+  /** Plural noun in progress copy, e.g. "districts" or "states". */
+  itemNoun?: string;
+  mapLabel?: string;
   onExit: () => void;
 };
 
 type Phase = "loading" | "error" | "playing" | "done";
 
-export function SeterraPinQuiz({ title, geoPath, onExit }: Props) {
+export function SeterraPinQuiz({
+  title,
+  geoPath,
+  itemNoun = "regions",
+  mapLabel = "Region map",
+  onExit,
+}: Props) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [error, setError] = useState<string | null>(null);
   const [features, setFeatures] = useState<DistrictFeature[]>([]);
-  const [bbox, setBBox] = useState<BBox>([76.2, 8.0, 80.4, 13.6]);
+  const [bbox, setBBox] = useState<BBox>([68.1, 6.7, 97.5, 35.6]);
   const [order, setOrder] = useState<string[]>([]);
   const [index, setIndex] = useState(0);
   const [wrong, setWrong] = useState(0);
@@ -76,7 +85,7 @@ export function SeterraPinQuiz({ title, geoPath, onExit }: Props) {
           name: f.properties.name,
           geometry: f.geometry,
         }));
-        if (!feats.length) throw new Error("Map has no districts");
+        if (!feats.length) throw new Error("Map has no regions");
         setFeatures(feats);
         if (data.bbox) setBBox(data.bbox);
         setSourceNote(data.meta?.source ?? "");
@@ -165,7 +174,7 @@ export function SeterraPinQuiz({ title, geoPath, onExit }: Props) {
     return (
       <div className="mx-auto flex min-h-[50vh] max-w-4xl flex-col items-center justify-center gap-3 px-4">
         <div className="h-10 w-10 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-        <p className="text-sm text-[var(--muted)]">Loading Tamil Nadu districts…</p>
+        <p className="text-sm text-[var(--muted)]">Loading {title}...</p>
       </div>
     );
   }
@@ -198,7 +207,7 @@ export function SeterraPinQuiz({ title, geoPath, onExit }: Props) {
           {pct}%
         </p>
         <p className="mt-2 text-[var(--muted)]">
-          Time {formatTimer(elapsed)} · {total} districts
+          Time {formatTimer(elapsed)} · {total} {itemNoun}
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <Button
@@ -243,7 +252,7 @@ export function SeterraPinQuiz({ title, geoPath, onExit }: Props) {
             data-testid="seterra-target"
             className="font-[family-name:var(--font-display)] text-lg text-[#f0d9a8]"
           >
-            {current?.name ?? "…"}
+            {current?.name ?? "..."}
           </span>
         </p>
         <div className="ml-auto flex items-center gap-3">
@@ -270,6 +279,7 @@ export function SeterraPinQuiz({ title, geoPath, onExit }: Props) {
           highlightId={highlightId}
           interactive={phase === "playing"}
           onSelect={onSelect}
+          mapLabel={mapLabel}
         />
         <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-[var(--muted)]">
           <span className="inline-flex items-center gap-1.5">
