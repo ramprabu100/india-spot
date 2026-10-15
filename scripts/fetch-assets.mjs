@@ -206,28 +206,6 @@ async function buildTnDistricts() {
   console.log(`Wrote ${features.length} districts -> ${path}`);
 }
 
-function asMultiPolygonCoords(geometry) {
-  if (geometry.type === "Polygon") return [geometry.coordinates];
-  if (geometry.type === "MultiPolygon") return geometry.coordinates;
-  throw new Error(`Unsupported geometry ${geometry.type}`);
-}
-
-/** Merge Pakistan-administered Kashmir (PoK) into Jammu & Kashmir for India's claim outline. */
-async function mergePokIntoJammuKashmir(features) {
-  const pokUrl =
-    "https://raw.githubusercontent.com/datameet/maps/master/Country/disputed/pok-districts-alhasan.geojson";
-  console.log("Downloading PoK districts (datameet) for J&K claim outline…");
-  const pok = await fetchJson(pokUrl);
-  const jk = features.find((f) => f.properties.name === "Jammu and Kashmir");
-  if (!jk) throw new Error("Jammu and Kashmir feature missing");
-  const coords = asMultiPolygonCoords(jk.geometry);
-  for (const f of pok.features || []) {
-    const simplified = simplifyGeomDp(f.geometry, 0.04);
-    coords.push(...asMultiPolygonCoords(simplified));
-  }
-  jk.geometry = { type: "MultiPolygon", coordinates: coords };
-}
-
 async function buildIndiaStates() {
   const url =
     "https://raw.githubusercontent.com/geohacker/india/master/state/india_state.geojson";
@@ -243,7 +221,18 @@ async function buildIndiaStates() {
       geometry,
     };
   });
-  await mergePokIntoJammuKashmir(features);
+
+  // Replace LoC-cut J&K with India-claim outline (PoK included).
+  // Patch built from geohacker J&K ∪ datameet pok-districts-alhasan.geojson.
+  const { readFileSync } = await import("node:fs");
+  const patch = JSON.parse(
+    readFileSync(join(root, "public/geo/jk-india-claim.geojson"), "utf8"),
+  );
+  const jk = features.find((f) => f.properties.name === "Jammu and Kashmir");
+  if (!jk) throw new Error("Jammu and Kashmir feature missing");
+  jk.geometry = patch.geometry;
+  console.log("Applied India-claim J&K outline (includes PoK)");
+
   const { walk, bbox } = makeBBoxWalker();
   for (const f of features) walk(f.geometry.coordinates);
   const out = {
@@ -251,7 +240,7 @@ async function buildIndiaStates() {
     bbox: bbox().map((n) => Number(n.toFixed(4))),
     meta: {
       source:
-        "https://github.com/geohacker/india — state/india_state.geojson; PoK from datameet/maps Country/disputed/pok-districts-alhasan.geojson merged into Jammu and Kashmir",
+        "https://github.com/geohacker/india — state/india_state.geojson; Jammu & Kashmir includes PoK via public/geo/jk-india-claim.geojson (datameet/maps Country/disputed/pok-districts-alhasan.geojson dissolved into J&K)",
       license_note:
         "Open community boundaries; Jammu & Kashmir includes Pakistan-administered Kashmir (PoK) per India's official claim for this quiz map.",
       region: "India",
