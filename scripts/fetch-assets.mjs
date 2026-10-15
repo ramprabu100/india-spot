@@ -286,4 +286,4 @@ async function buildImages() {
 await buildTnDistricts();
 await buildIndiaStates();
 await buildImages();
-console.log("Assets ready.\n");
+console.log("Assets ready.");
