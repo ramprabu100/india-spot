@@ -1,6 +1,9 @@
 name: Assemble IAB2024 GeoJSON
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'public/geo/_parts/b*.txt'
 jobs:
   assemble:
     runs-on: ubuntu-latest
@@ -11,6 +14,10 @@ jobs:
       - name: Materialize full IAB2024 polygons
         run: |
           set -euo pipefail
+          # Wait until all 22 India slices are present
+          count=$(ls public/geo/_parts/b*.txt 2>/dev/null | wc -l)
+          echo "india slices: $count"
+          test "$count" -eq 22
           curl -fsSL "https://raw.githubusercontent.com/ramprabu100/india-spot/89381a9ca210d664d4c090f8379227dac3a8fa7c/_mcp_size_probe.txt" \
             -o public/geo/tn-districts.geojson
           cat public/geo/_parts/b*.txt > public/geo/india-states.geojson
