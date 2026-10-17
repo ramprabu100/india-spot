@@ -1,1 +1,0 @@
-__ARGUMENTS_FILE__:/tmp/cuof_a01.json
