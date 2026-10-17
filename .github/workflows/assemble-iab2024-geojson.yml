@@ -1,0 +1,28 @@
+name: Assemble IAB2024 GeoJSON
+on:
+  workflow_dispatch:
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize full IAB2024 polygons
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/ramprabu100/india-spot/89381a9ca210d664d4c090f8379227dac3a8fa7c/_mcp_size_probe.txt" \
+            -o public/geo/tn-districts.geojson
+          cat public/geo/_parts/b*.txt > public/geo/india-states.geojson
+          wc -c public/geo/tn-districts.geojson public/geo/india-states.geojson
+          python3 -c "import json; json.load(open('public/geo/tn-districts.geojson')); json.load(open('public/geo/india-states.geojson')); print('json ok')"
+          test "$(wc -c < public/geo/tn-districts.geojson)" -eq 83808
+          test "$(wc -c < public/geo/india-states.geojson)" -eq 109399
+      - name: Commit assembled polygons
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/geo/tn-districts.geojson public/geo/india-states.geojson
+          git diff --cached --quiet && echo "no changes" && exit 0
+          git commit -m "Commit full IAB2024 India/TN GeoJSON polygons"
+          git push
