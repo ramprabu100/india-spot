@@ -1,28 +1,36 @@
 /**
  * CI helper: refresh TN district + India state GeoJSON and Spot images before static export.
- * Keeps gameplay identical; assets are the same open sources used locally.
+ * India states/UTs: Esri India Living Atlas IAB2024 (official 2024 admin boundaries).
+ * Northern claim outline: vendored india-north-claim.geojson (PoK, GB, Aksai Chin, Kalapani).
  */
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const UA = "IndiaSpot/1.0 (GitHub Pages build; educational)";
 
+const IAB2024 =
+  "https://livingatlas.esri.in/server/rest/services/IAB2024/India_Administrative_Boundaries_2024/MapServer";
+
 const TN_NAME_FIX = {
-  Tiruchchirappalli: "Tiruchirappalli",
-  "Tirunelveli Kattabo": "Tirunelveli",
-  Kanniyakumari: "Kanyakumari",
   Kancheepuram: "Kanchipuram",
+  Kanniyakumari: "Kanyakumari",
+  "The Nilgiris": "Nilgiris",
+  Sivaganga: "Sivagangai",
+  Thoothukkudi: "Thoothukudi",
   Thiruvallur: "Tiruvallur",
   Thiruvarur: "Tiruvarur",
-  Sivaganga: "Sivagangai",
 };
 
 const STATE_NAME_FIX = {
-  Orissa: "Odisha",
-  Uttaranchal: "Uttarakhand",
-  "Andaman and Nicobar": "Andaman and Nicobar Islands",
+  "Andaman And Nicobar Islands": "Andaman and Nicobar Islands",
+  "Jammu And Kashmir": "Jammu and Kashmir",
+  "The Dadra And Nagar Haveli And Daman And Diu":
+    "Dadra and Nagar Haveli and Daman and Diu",
+  "Dadra And Nagar Haveli And Daman And Diu":
+    "Dadra and Nagar Haveli and Daman and Diu",
+  "NCT of Delhi": "Delhi",
 };
 
 const IMAGES = [
@@ -72,27 +80,6 @@ function makeBBoxWalker() {
     walk,
     bbox: () => [minx, miny, maxx, maxy],
   };
-}
-
-function simplifyRing(ring, step) {
-  if (ring.length <= 4 || step <= 1) return ring;
-  const out = ring.filter((_, i) => i % step === 0 || i === ring.length - 1);
-  if (out[0][0] !== out[out.length - 1][0] || out[0][1] !== out[out.length - 1][1]) {
-    out.push(out[0]);
-  }
-  return out;
-}
-
-function simplifyGeom(geom, step) {
-  const g = structuredClone(geom);
-  if (g.type === "Polygon") {
-    g.coordinates = g.coordinates.map((r) => simplifyRing(r, step));
-  } else if (g.type === "MultiPolygon") {
-    g.coordinates = g.coordinates.map((poly) =>
-      poly.map((r) => simplifyRing(r, step)),
-    );
-  }
-  return g;
 }
 
 function perpDist(a, b, p) {
@@ -168,19 +155,32 @@ function simplifyGeomDp(geom, epsilon) {
   return g;
 }
 
+/** Esri polygon rings → GeoJSON (each ring as its own polygon part). */
+function esriRingsToGeom(rings) {
+  if (!rings?.length) return null;
+  const coords = rings.map((r) => r.map(([x, y]) => [x, y]));
+  if (coords.length === 1) return { type: "Polygon", coordinates: coords };
+  return { type: "MultiPolygon", coordinates: coords.map((r) => [r]) };
+}
+
 async function buildTnDistricts() {
   const url =
-    "https://raw.githubusercontent.com/geohacker/india/master/district/india_district.geojson";
-  console.log("Downloading district boundaries…");
+    `${IAB2024}/2/query?` +
+    new URLSearchParams({
+      where: "state='Tamil Nadu'",
+      outFields: "name,state",
+      outSR: "4326",
+      f: "geojson",
+      resultRecordCount: "50",
+    });
+  console.log("Downloading Tamil Nadu districts (IAB2024)…");
   const data = await fetchJson(url);
-  const tn = data.features.filter(
-    (f) => String(f.properties?.NAME_1 || "").toLowerCase() === "tamil nadu",
-  );
+  if (!data.features?.length) throw new Error("IAB2024 returned no TN districts");
   const { walk, bbox } = makeBBoxWalker();
-  const features = tn.map((f) => {
-    const raw = f.properties.NAME_2;
+  const features = data.features.map((f) => {
+    const raw = f.properties.name;
     const name = TN_NAME_FIX[raw] || raw;
-    const geometry = simplifyGeom(f.geometry, 6);
+    const geometry = simplifyGeomDp(f.geometry, 0.008);
     walk(geometry.coordinates);
     return {
       type: "Feature",
@@ -188,13 +188,15 @@ async function buildTnDistricts() {
       geometry,
     };
   });
+  features.sort((a, b) => a.properties.name.localeCompare(b.properties.name));
   const out = {
     type: "FeatureCollection",
-    bbox: bbox(),
+    bbox: bbox().map((n) => Number(n.toFixed(4))),
     meta: {
-      source: "https://github.com/geohacker/india — district/india_district.geojson",
+      source:
+        "Esri India Living Atlas IAB2024 — India Administrative Boundaries 2024 (District Boundary); Survey of India / LGD aligned",
       license_note:
-        "Open community boundaries derived from public GADM-style data; simplified for web quiz use.",
+        "Official 2024 administrative district boundaries via Esri India Living Atlas; simplified for web quiz use.",
       region: "Tamil Nadu",
       count: features.length,
     },
@@ -207,14 +209,25 @@ async function buildTnDistricts() {
 }
 
 async function buildIndiaStates() {
+  // maxAllowableOffset keeps payload small while preserving post-2014 AP/TG split.
   const url =
-    "https://raw.githubusercontent.com/geohacker/india/master/state/india_state.geojson";
-  console.log("Downloading India state / UT boundaries…");
-  const data = await fetchJson(url);
-  const features = data.features.map((f) => {
-    const raw = f.properties.NAME_1;
+    `${IAB2024}/1/query?` +
+    new URLSearchParams({
+      where: "1=1",
+      outFields: "name",
+      outSR: "4326",
+      f: "json",
+      resultRecordCount: "50",
+      maxAllowableOffset: "0.002",
+    });
+  console.log("Downloading India state / UT boundaries (IAB2024)…");
+  const esri = await fetchJson(url);
+  if (!esri.features?.length) throw new Error("IAB2024 returned no states");
+
+  const features = esri.features.map((f) => {
+    const raw = f.attributes.name;
     const name = STATE_NAME_FIX[raw] || raw;
-    const geometry = simplifyGeomDp(f.geometry, 0.04);
+    const geometry = simplifyGeomDp(esriRingsToGeom(f.geometry.rings), 0.04);
     return {
       type: "Feature",
       properties: { name, id: slugify(name) },
@@ -226,7 +239,6 @@ async function buildIndiaStates() {
   // J&K = Indian J&K + Azad Kashmir (PoK) + Gilgit-Baltistan;
   // Ladakh = Indian Ladakh + Aksai Chin + Shaksgam + Siachen + Demchok.
   // Kalapani is dissolved into Uttarakhand when present in the north-claim pack.
-  const { readFileSync } = await import("node:fs");
   const north = JSON.parse(
     readFileSync(join(root, "public/geo/india-north-claim.geojson"), "utf8"),
   );
@@ -239,25 +251,58 @@ async function buildIndiaStates() {
   const jk = features.find((f) => f.properties.name === "Jammu and Kashmir");
   if (!jk) throw new Error("Jammu and Kashmir feature missing");
   jk.geometry = jkPatch.geometry;
-  const withoutLadakh = features.filter((f) => f.properties.name !== "Ladakh");
-  const jkIdx = withoutLadakh.findIndex((f) => f.properties.name === "Jammu and Kashmir");
-  withoutLadakh.splice(jkIdx + 1, 0, {
-    type: "Feature",
-    properties: { name: "Ladakh", id: "ladakh" },
-    geometry: ladakhPatch.geometry,
-  });
+
+  let ladakh = features.find((f) => f.properties.name === "Ladakh");
+  if (ladakh) {
+    ladakh.geometry = ladakhPatch.geometry;
+  } else {
+    const jkIdx = features.findIndex((f) => f.properties.name === "Jammu and Kashmir");
+    features.splice(jkIdx + 1, 0, {
+      type: "Feature",
+      properties: { name: "Ladakh", id: "ladakh" },
+      geometry: ladakhPatch.geometry,
+    });
+  }
+
   if (kalapaniPatch) {
-    const uk = withoutLadakh.find((f) => f.properties.name === "Uttarakhand");
+    const uk = features.find((f) => f.properties.name === "Uttarakhand");
     if (uk && uk.geometry?.type === "Polygon" && kalapaniPatch.geometry?.type === "Polygon") {
-      // Keep Uttarakhand as MultiPolygon so Kalapani is visible without a geometry library.
       uk.geometry = {
         type: "MultiPolygon",
         coordinates: [uk.geometry.coordinates, kalapaniPatch.geometry.coordinates],
       };
+    } else if (
+      uk &&
+      uk.geometry?.type === "MultiPolygon" &&
+      kalapaniPatch.geometry?.type === "Polygon"
+    ) {
+      uk.geometry.coordinates.push(kalapaniPatch.geometry.coordinates);
     }
   }
-  features.length = 0;
-  features.push(...withoutLadakh);
+
+  features.sort((a, b) => a.properties.name.localeCompare(b.properties.name));
+
+  const required = [
+    "Andhra Pradesh",
+    "Telangana",
+    "Jammu and Kashmir",
+    "Ladakh",
+    "Dadra and Nagar Haveli and Daman and Diu",
+    "Delhi",
+  ];
+  for (const n of required) {
+    if (!features.some((f) => f.properties.name === n)) {
+      throw new Error(`Missing required region: ${n}`);
+    }
+  }
+  // Guard against pre-2014 undivided Andhra (no Telangana) or split DNH/DD.
+  if (features.some((f) => f.properties.name === "Dadra and Nagar Haveli")) {
+    throw new Error("Dadra and Nagar Haveli must be merged with Daman and Diu");
+  }
+  if (features.some((f) => f.properties.name === "Daman and Diu")) {
+    throw new Error("Daman and Diu must be merged into Dadra and Nagar Haveli and Daman and Diu");
+  }
+
   console.log(
     "Applied India-claim outline (J&K: PoK+Gilgit-Baltistan; Ladakh: Aksai Chin+Shaksgam+Siachen+Demchok; Kalapani→Uttarakhand)",
   );
@@ -269,9 +314,9 @@ async function buildIndiaStates() {
     bbox: bbox().map((n) => Number(n.toFixed(4))),
     meta: {
       source:
-        "https://github.com/geohacker/india — state/india_state.geojson; northern claim via public/geo/india-north-claim.geojson (BharatMaps + datameet PoK/Gilgit-Baltistan + LSIB Aksai Chin/Siachen/Demchok + NE Shaksgam)",
+        "Esri India Living Atlas IAB2024 — India Administrative Boundaries 2024 (State Boundary; Survey of India / LGD aligned); northern claim via public/geo/india-north-claim.geojson (BharatMaps + datameet PoK/Gilgit-Baltistan + LSIB Aksai Chin/Siachen/Demchok + NE Shaksgam)",
       license_note:
-        "Open community boundaries; Jammu & Kashmir includes PoK and Gilgit-Baltistan; Ladakh includes Aksai Chin (plus Shaksgam/Siachen/Demchok) per India's official claim for this quiz map.",
+        "Official 2024 state/UT boundaries (post-2014 Andhra Pradesh / Telangana; J&K and Ladakh UTs; merged Dadra and Nagar Haveli and Daman and Diu). Jammu & Kashmir includes PoK and Gilgit-Baltistan; Ladakh includes Aksai Chin (plus Shaksgam/Siachen/Demchok) per India's official claim for this quiz map.",
       region: "India",
       count: features.length,
       claim_areas_added: [
