@@ -163,6 +163,7 @@ export function GameApp() {
         <SeterraPinQuiz
           title={activeQuiz.title}
           geoPath={activeQuiz.geoPath}
+          quizId={activeQuiz.id}
           itemNoun={activeQuiz.itemNoun ?? "regions"}
           mapLabel={`${activeQuiz.title} map`}
           onExit={() => setScreen({ kind: "home" })}
