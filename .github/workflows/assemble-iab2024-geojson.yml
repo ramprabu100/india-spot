@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'public/geo/_parts/b*.txt'
+      - 'public/geo/_parts/b[0-9][0-9].txt'
 jobs:
   assemble:
     runs-on: ubuntu-latest
@@ -17,21 +17,9 @@ jobs:
           count=$(ls public/geo/_parts/b[0-9][0-9].txt 2>/dev/null | wc -l)
           echo "india slices: $count"
           test "$count" -eq 22
-          test -f public/geo/_parts/b01_end.txt
           curl -fsSL "https://raw.githubusercontent.com/ramprabu100/india-spot/89381a9ca210d664d4c090f8379227dac3a8fa7c/_mcp_size_probe.txt" \
             -o public/geo/tn-districts.geojson
-          python3 <<'PY'
-          from pathlib import Path
-          parts_dir = Path('public/geo/_parts')
-          chunks = []
-          for i in range(22):
-              chunks.append((parts_dir / f'b{i:02d}.txt').read_text())
-              if i == 1:
-                  chunks.append((parts_dir / 'b01_end.txt').read_text())
-          out = ''.join(chunks)
-          Path('public/geo/india-states.geojson').write_text(out)
-          print('india bytes', len(out.encode()))
-          PY
+          cat public/geo/_parts/b[0-9][0-9].txt > public/geo/india-states.geojson
           wc -c public/geo/tn-districts.geojson public/geo/india-states.geojson
           python3 -c "import json; json.load(open('public/geo/tn-districts.geojson')); json.load(open('public/geo/india-states.geojson')); print('json ok')"
           test "$(wc -c < public/geo/tn-districts.geojson)" -eq 83808
